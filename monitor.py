@@ -121,6 +121,15 @@ def main():
 if __name__ == "__main__":
     main()
 
+import time
+
+INTERVALO = 120  # segundos
+
 while True:
-    main()
-    time.sleep(120)
+    try:
+        verificar_convocacao()
+    except Exception as erro:
+        print("Erro na verificação:", erro)
+
+    print("Aguardando próxima verificação...")
+    time.sleep(INTERVALO)
