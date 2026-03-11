@@ -1,192 +1,122 @@
 import requests
 import time
-import logging
-import os
 import re
+import logging
+from bs4 import BeautifulSoup
 from datetime import datetime
 
-# =========================
-# CONFIG
-# =========================
+# =============================
+# CONFIGURAÇÕES
+# =============================
+URL_PAGINA = "https://www.seduc.pa.gov.br/pagina/14250-pss-07-2025---professor-nivel-superior"
+INTERVALO_VERIFICACAO = 120  # segundos (2 minutos)
 
-URL_CONVOCACOES = "https://pss.seduc.pa.gov.br/"
-URL_PAINEL = "https://pss.seduc.pa.gov.br/acompanhamento/painel.php"
+TELEGRAM_TOKEN = "8447403267:AAFHAXGX8Vy9D3JdNHaQ956RO0uj2IighMg"
+TELEGRAM_CHAT_ID = "1088198556"
 
-ARQ_CONVOCACAO = "ultima_convocacao.txt"
-ARQ_PRAZO = "prazo_detectado.txt"
+ARQUIVO_ULTIMA = "ultima_convocacao.txt"
+LOG_FILE = "monitor.log"
 
-INTERVALO = 60
-
-TOKEN = "SEU_TOKEN"
-CHAT_ID = "SEU_CHAT_ID"
-
-# =========================
-# LOG
-# =========================
-
+# =============================
+# LOGGING
+# =============================
 logging.basicConfig(
+    filename=LOG_FILE,
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-# =========================
-# TELEGRAM
-# =========================
+# =============================
+# FUNÇÕES
+# =============================
 
-def enviar_telegram(msg):
-
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": msg
-    }
-
+def enviar_telegram(mensagem: str):
     try:
-        requests.post(url, data=payload, timeout=20)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": mensagem,
+            "parse_mode": "HTML"
+        }
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
-        logging.error(f"Erro Telegram: {e}")
+        logging.error(f"Erro ao enviar Telegram: {e}")
 
-
-# =========================
-# CONVOCAÇÕES
-# =========================
-
-def extrair_convocacao(html):
-
-    padrao = r'(\d+)[ªa]\s*Convoca'
-
-    match = re.search(padrao, html, re.IGNORECASE)
-
-    if match:
-        return int(match.group(1))
-
-    return None
-
-
-def ler_ultima():
-
-    if not os.path.exists(ARQ_CONVOCACAO):
+def carregar_ultima_convocacao():
+    try:
+        with open(ARQUIVO_ULTIMA, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except:
         return 0
 
-    with open(ARQ_CONVOCACAO, "r") as f:
-        return int(f.read())
+def salvar_ultima_convocacao(numero):
+    with open(ARQUIVO_ULTIMA, "w", encoding="utf-8") as f:
+        f.write(str(numero))
 
-
-def salvar_convocacao(num):
-
-    with open(ARQ_CONVOCACAO, "w") as f:
-        f.write(str(num))
-
-
-def verificar_convocacoes():
-
-    logging.info("Verificando nova convocação...")
-
-    r = requests.get(URL_CONVOCACOES, timeout=30)
-
-    if r.status_code != 200:
-        return
-
-    html = r.text
-
-    numero = extrair_convocacao(html)
-
-    if not numero:
-        return
-
-    ultima = ler_ultima()
-
-    if numero > ultima:
-
-        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        mensagem = (
-            "🚨 NOVA CONVOCAÇÃO DETECTADA\n\n"
-            f"📄 Convocação: {numero}ª\n"
-            f"⏰ Detectado em: {agora}\n\n"
-            f"{URL_CONVOCACOES}"
-        )
-
-        enviar_telegram(mensagem)
-
-        salvar_convocacao(numero)
-
-        logging.warning(f"Nova convocação detectada: {numero}")
-
-    else:
-
-        logging.info("Sem novas convocações.")
-
-
-# =========================
-# PRAZO DOCUMENTOS
-# =========================
-
-def verificar_painel():
-
-    logging.info("Verificando painel de documentos...")
-
-    r = requests.get(URL_PAINEL, timeout=30)
-
-    if r.status_code != 200:
-        return
-
-    html = r.text
-
-    padrao = r'Prazo\s*de\s*Envio\s*da\s*Documenta'
-
-    encontrou = re.search(padrao, html, re.IGNORECASE)
-
-    if not encontrou:
-        logging.info("Nenhum prazo detectado.")
-        return
-
-    prazo_texto = encontrou.group()
-
-    if os.path.exists(ARQ_PRAZO):
-
-        with open(ARQ_PRAZO, "r") as f:
-            salvo = f.read()
-
-        if salvo == prazo_texto:
-            return
-
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    mensagem = (
-        "🚨 PRAZO PARA ENVIO DE DOCUMENTOS DETECTADO\n\n"
-        "Verifique imediatamente o painel da SEDUC.\n\n"
-        f"⏰ Detectado em: {agora}\n\n"
-        f"{URL_PAINEL}"
-    )
-
-    enviar_telegram(mensagem)
-
-    with open(ARQ_PRAZO, "w") as f:
-        f.write(prazo_texto)
-
-    logging.warning("Prazo de documentos detectado!")
-
-
-# =========================
-# LOOP
-# =========================
-
-logging.info("=== Monitor SEDUC iniciado ===")
-
-while True:
-
+def detectar_nova_convocacao():
     try:
+        response = requests.get(URL_PAGINA, timeout=15)
+        response.raise_for_status()
 
-        verificar_convocacoes()
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.find_all("a")
 
-        verificar_painel()
+        numeros = []
 
-    except Exception as erro:
+        for link in links:
+            texto = link.get_text(strip=True).lower()
 
-        logging.error(f"Erro geral: {erro}")
+            # regex robusto para "17ª convocação", "17a convocação", etc
+            match = re.search(r"(\d{1,2})\s*[ªa]?\s*convoca", texto)
+            if match:
+                numeros.append(int(match.group(1)))
 
-    logging.info("Aguardando próximo ciclo...\n")
+        if not numeros:
+            logging.warning("Não foi possível detectar número da convocação.")
+            return None
 
-    time.sleep(INTERVALO)
+        return max(numeros)
+
+    except Exception as e:
+        logging.error(f"Erro ao detectar convocação: {e}")
+        return None
+
+# =============================
+# MAIN
+# =============================
+
+def main():
+    logging.info("=== Monitor SEDUC iniciado ===")
+
+    ultima_convocacao = carregar_ultima_convocacao()
+    logging.info(f"Última convocação registrada: {ultima_convocacao}")
+
+    while True:
+        logging.info("Verificando nova convocação...")
+
+        numero_atual = detectar_nova_convocacao()
+
+        if numero_atual and numero_atual > ultima_convocacao:
+            logging.warning(f"Nova convocação detectada: {numero_atual}")
+
+            mensagem = (
+                f"🚨 <b>NOVA CONVOCAÇÃO DETECTADA</b>\n\n"
+                f"📄 Convocação: <b>{numero_atual}ª</b>\n"
+                f"⏰ Detectado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+                f"🔗 Acesse o site da SEDUC para detalhes."
+            )
+
+            enviar_telegram(mensagem)
+            salvar_ultima_convocacao(numero_atual)
+            ultima_convocacao = numero_atual
+        else:
+            logging.info("Sem novidades.")
+
+        logging.info("Ciclo finalizado. Aguardando próximo intervalo.")
+        time.sleep(120)
+
+# =============================
+# EXECUÇÃO
+# =============================
+if __name__ == "__main__":
+    main()
